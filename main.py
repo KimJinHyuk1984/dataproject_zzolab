@@ -1,74 +1,39 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import requests
-import folium
-from folium.plugins import MarkerCluster
-from streamlit_folium import st_folium
+import plotly.graph_objects as go
 
-st.title("신한 PRM 카드 무료주차장 지도")
+# CSV 파일 경로
+MALE_FEMALE_CSV = "202504_202504_연령별인구현황_월간_남녀구분.csv"
 
-# 1. 데이터 파일 직접 불러오기
-DATA_FILE = "신한RPM(250517)서울.xlsx"   # csv로 하려면 "신한RPM(250517)_seoul.csv"
-df = pd.read_excel(DATA_FILE)   # csv 파일일 경우 pd.read_csv(DATA_FILE)
+# 데이터 불러오기
+df_mf = pd.read_csv(MALE_FEMALE_CSV, encoding='cp949')
 
-st.write("데이터 미리보기", df.head())
+# 서울특별시 전체 데이터만 추출
+df_seoul = df_mf[df_mf['행정구역'].str.contains('서울특별시  ')].iloc[0]
 
-# 2. 네이버 API 입력 (변경 가능)
-client_id = st.text_input("NAVER Client ID", value="buvx09i4ew")
-client_pw = st.text_input("NAVER Client Secret", value="bteRnQRR6FJOyrN04UXulAVpI1ijl9MBXO0gb2jT")
-api_url = 'https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query='
+# 남자, 여자 연령별 컬럼 추출
+male_cols = [col for col in df_mf.columns if "남_" in col and "세" in col]
+female_cols = [col for col in df_mf.columns if "여_" in col and "세" in col]
+ages = [col.split('_')[-1].replace('세', '') for col in male_cols]
 
-# 3. 좌표 변환 실행 버튼
-if st.button("위도/경도 변환 및 지도 생성"):
-    geo_coordi = []
-    for addr in df['주소']:
-        url = api_url + requests.utils.quote(addr)
-        headers = {
-            'X-NCP-APIGW-API-KEY-ID': client_id,
-            'X-NCP-APIGW-API-KEY': client_pw
-        }
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            result = res.json()
-            if result['addresses']:
-                latitude = float(result['addresses'][0]['y'])
-                longitude = float(result['addresses'][0]['x'])
-            else:
-                latitude = None
-                longitude = None
-        else:
-            latitude = None
-            longitude = None
-        geo_coordi.append([latitude, longitude])
+# 숫자 변환 및 음수로 변환 (피라미드용)
+male_counts = df_seoul[male_cols].str.replace(",", "").astype(int) * -1
+female_counts = df_seoul[female_cols].str.replace(",", "").astype(int)
 
-    coords = np.array(geo_coordi)
-    df['위도'] = coords[:, 0]
-    df['경도'] = coords[:, 1]
+# Streamlit 화면 구성
+st.title("📊 서울시 인구 피라미드 (남녀 구분) - 2025년 4월")
 
-    st.write("위도/경도 변환 결과", df.head())
+fig = go.Figure()
+fig.add_trace(go.Bar(y=ages, x=male_counts, name='남자', orientation='h', marker_color='blue'))
+fig.add_trace(go.Bar(y=ages, x=female_counts, name='여자', orientation='h', marker_color='red'))
 
-    # 지도 표시
-    valid_rows = df.dropna(subset=['위도', '경도'])
-    if not valid_rows.empty:
-        map_center = [valid_rows['위도'].values[0], valid_rows['경도'].values[0]]
-        m = folium.Map(location=map_center, zoom_start=12)
-        marker_cluster = MarkerCluster().add_to(m)
-        for _, row in valid_rows.iterrows():
-            folium.Marker(
-                location=[row['위도'], row['경도']],
-                tooltip=row['명칭'],
-                icon=folium.Icon(color="green")
-            ).add_to(marker_cluster)
-        st_folium(m, width=700, height=500)
-    else:
-        st.warning("변환된 좌표가 없습니다. 주소 또는 API 키를 확인해주세요.")
+fig.update_layout(
+    barmode='relative',
+    title='서울특별시 연령별 인구 피라미드',
+    xaxis=dict(title='인구수', tickvals=[-30000, -15000, 0, 15000, 30000],
+               ticktext=['30,000', '15,000', '0', '15,000', '30,000']),
+    yaxis=dict(title='연령'),
+    height=800
+)
 
-    # 다운로드 기능
-    csv = df.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(
-        label="변환 결과 다운로드 (CSV)",
-        data=csv,
-        file_name="신한RPM_좌표포함.csv",
-        mime='text/csv'
-    )
+st.plotly_chart(fig, use_container_width=True)
